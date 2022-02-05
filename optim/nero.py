@@ -21,15 +21,24 @@ class Nero(Optimizer):
 
     def __init__(self, params, lr=0.01, beta=0.999, constraints=True):
         self.beta = beta
-        self.constraints = constraints
-        defaults = dict(lr=lr)
+        # self.constraints = constraints
+        defaults = dict(lr=lr, constraints=constraints)
         super(Nero, self).__init__(params, defaults)
 
         for group in self.param_groups:
             for p in group['params']:
-                if self.constraints and p.dim() > 1:
+                if group['constraints'] and \
+                    p.dim() > 1 and \
+                    not (p.ndim == 2 and 1 in p.shape):
+                    if (neuron_norm(p) == 0).any().item():
+                        print(f"[WARNING] Neuron norm for param with "
+                              f"dimensions:{p.shape}. Skipping.")
+                    inverse = 1 / neuron_norm(p)
+                    if torch.isnan(inverse).any().item() or torch.isinf(inverse).any().item():
+                        raise RuntimeError("[ERROR] NaN parameter.")
                     p.data -= neuron_mean(p)
                     p.data /= neuron_norm(p)
+
                 state = self.state[p]
                 state['step'] = 0
                 state['exp_avg_sq'] = torch.zeros_like(neuron_norm(p))
@@ -58,11 +67,17 @@ class Nero(Optimizer):
                 state['exp_avg_sq'] = self.beta * state['exp_avg_sq'] + (1-self.beta) * neuron_norm(p.grad)**2
 
                 grad_normed = p.grad / (state['exp_avg_sq']/bias_correction).sqrt()
-                grad_normed[torch.isnan(grad_normed)] = 0
+                torch.nan_to_num(input=grad_normed,
+                                 nan=0.0,
+                                 posinf=0.0,
+                                 neginf=0.0,
+                                 out=grad_normed)
                 
                 p.data -= group['lr'] * state['scale'] * grad_normed
 
-                if self.constraints and p.dim() > 1:
+                if group['constraints'] and p.dim() > 1 \
+                    and not torch.isnan(1/neuron_norm(p)).any().item() \
+                    and not torch.isnan(1/neuron_norm(p)).any().item():
                     p.data -= neuron_mean(p)
                     p.data /= neuron_norm(p)
 
